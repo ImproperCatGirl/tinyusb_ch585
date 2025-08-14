@@ -26,9 +26,9 @@
  * This file is part of the TinyUSB stack.
  */
 
+#include "common/tusb_types.h"
 #include "tusb_option.h"
 
-#if CFG_TUSB_MCU == OPT_MCU_CH585
 
 #include "CH585SFR.h" //WCH no longer use the structure + base address header, rather, they are using absolute address for everything.
 //it also included all register bit values.
@@ -36,9 +36,7 @@
 #include "CH58x_common.h"
 #include "tusb_option.h"
 
-#endif
-
-#if CFG_TUD_ENABLED && CFG_TUD_WCH_USBIP_USBFS_585
+#if 1
 
 #include "device/dcd.h"
 
@@ -46,10 +44,17 @@
 #define USBFS_INT_ST_MASK_UIS_ENDP(x)  (((x) >> 0) & 0x0F)
 #define USBFS_INT_ST_MASK_UIS_TOKEN(x) (((x) >> 4) & 0x03)
 
-#define PID_OUT   0
-#define PID_SOF   1
-#define PID_IN    2
-#define PID_SETUP 3
+/*
+#define PID_OUT   0b00
+#define PID_SOF   ?
+#define PID_IN    0b10
+#define PID_SETUP ?*/
+
+// token PID
+#define PID_OUT   0b00
+#define PID_SOF   1 //from other WCH chips' driver
+#define PID_IN    0b10
+#define PID_SETUP 3 //from other WCH chips' driver
 
 /* private defines */
 #define EP_MAX (8)
@@ -111,7 +116,9 @@ struct usb_xfer {
 };
 
 static struct {
-  bool ep0_tog;
+  //bool ep0_tog;
+  bool ep0_tog_in;
+  bool ep0_tog_out;
   bool isochronous[EP_MAX];
   struct usb_xfer xfer[EP_MAX][2];
   TU_ATTR_ALIGNED(4) uint8_t buffer[EP_MAX][2][64];
@@ -119,19 +126,21 @@ static struct {
     uint8_t out[64];
     uint8_t in[64];
     uint8_t pad;
-  } ep3_buffer;
+  } ep4_buffer;
+  TU_ATTR_ALIGNED(4) uint8_t ep0_DMA_buffer[64]
 } data;
 
 /* private helpers */
 static void update_in(uint8_t rhport, uint8_t ep, bool force) {
+  printf("update_in: ep=%d, ep0_in_tog=%d\n", ep, data.ep0_tog_in);
   struct usb_xfer* xfer = &data.xfer[ep][TUSB_DIR_IN];
   if (xfer->valid) {
     if (force || xfer->len) {
       size_t len = TU_MIN(xfer->max_size, xfer->len);
       if (ep == 0) {
-        memcpy(data.buffer[ep][TUSB_DIR_OUT], xfer->buffer, len); // ep0 uses same chunk
-      } else if (ep == 3) {
-        memcpy(data.ep3_buffer.in, xfer->buffer, len);
+        //memcpy(data.buffer[ep][TUSB_DIR_OUT], xfer->buffer, len); // ep0 uses same chunk
+      } else if (ep == 4) {
+        memcpy(data.ep4_buffer.in, xfer->buffer, len);
       } else {
         memcpy(data.buffer[ep][TUSB_DIR_IN], xfer->buffer, len);
       }
@@ -142,8 +151,8 @@ static void update_in(uint8_t rhport, uint8_t ep, bool force) {
       set_endpoint_t_len(ep, len);
       if (ep == 0) {
         set_endpoint_tx_ctrl(ep, UEP_T_RES_ACK, false);
-        R8_UEP0_CTRL = (R8_UEP0_CTRL & ~RB_UEP_T_TOG) | (data.ep0_tog ? RB_UEP_T_TOG : 0);
-        data.ep0_tog = !data.ep0_tog;
+        R8_UEP0_CTRL = (R8_UEP0_CTRL & ~RB_UEP_T_TOG) | (data.ep0_tog_in ? RB_UEP_T_TOG : 0);
+        data.ep0_tog_in = !data.ep0_tog_in;
       } else if (data.isochronous[ep]) {
         set_endpoint_tx_ctrl(ep, UEP_T_RES_TOUT, true);//NYET?
       } else {
@@ -158,28 +167,41 @@ static void update_in(uint8_t rhport, uint8_t ep, bool force) {
 }
 
 static void update_out(uint8_t rhport, uint8_t ep, size_t rx_len) {
-  struct usb_xfer *xfer = &data.xfer[ep][TUSB_DIR_OUT];
-  if (rx_len) {
-    size_t len = TU_MIN(xfer->max_size, TU_MIN(xfer->len, rx_len));
-    if (ep == 3) {
-      memcpy(xfer->buffer, data.ep3_buffer.out, len);
+  printf("update_out: ep=%d, ep0_out_tog=%d\n", ep, data.ep0_tog_out);
+  struct usb_xfer *xfer = &data.xfer[ep][TUSB_DIR_OUT];\
+  //size_t len = TU_MIN(xfer->max_size, TU_MIN(xfer->len, rx_len));
+  // Handle ZLP or data packet
+  size_t len = (ep == 0 && rx_len == 0) ? 0 : TU_MIN(xfer->max_size, TU_MIN(xfer->len, rx_len));
+  if(len > 0)
+  {
+    if(ep == 0)
+    {
+      //logic
+    }
+    if (ep == 4) {
+      memcpy(xfer->buffer, data.ep4_buffer.out, len);
     } else {
       memcpy(xfer->buffer, data.buffer[ep][TUSB_DIR_OUT], len);
     }
     xfer->buffer += len;
     xfer->len -= len;
     xfer->processed_len += len;
+  
+  }
+  else 
+  {
+    printf("ZLP processing\n");
+  }
+  if (xfer->len == 0 || len < xfer->max_size) {
+    xfer->valid = false;
+    printf("processed_len = %d", xfer->processed_len);
+    dcd_event_xfer_complete(rhport, ep, xfer->processed_len, XFER_RESULT_SUCCESS, true);
+  }
 
-    if (xfer->len == 0 || len < xfer->max_size) {
-      xfer->valid = false;
-      dcd_event_xfer_complete(rhport, ep, xfer->processed_len, XFER_RESULT_SUCCESS, true);
-    }
-
-    if (ep == 0) {
-      set_endpoint_tx_ctrl(ep, UEP_T_RES_ACK, false);
-      R8_UEP0_CTRL = (R8_UEP0_CTRL & ~RB_UEP_T_TOG) | (data.ep0_tog ? RB_UEP_T_TOG : 0);
-      data.ep0_tog = !data.ep0_tog;
-    }
+  if (ep == 0) {
+    set_endpoint_tx_ctrl(ep, UEP_T_RES_ACK, false);
+    R8_UEP0_CTRL = (R8_UEP0_CTRL & ~RB_UEP_R_TOG) | (data.ep0_tog_out ? RB_UEP_R_TOG : 0);
+    data.ep0_tog_out = !data.ep0_tog_out;
   }
 }
 
@@ -201,7 +223,8 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init)
     R8_UEP6_CTRL = UEP_R_RES_ACK | UEP_T_RES_NAK | RB_UEP_AUTO_TOG;
     R8_UEP7_CTRL = UEP_R_RES_ACK | UEP_T_RES_NAK | RB_UEP_AUTO_TOG;
 
-    R32_UEP0_DMA = (uint32_t) &data.buffer[0];
+    //R32_UEP0_DMA = (uint32_t) &data.buffer[0];
+    R32_UEP0_DMA = (uint32_t) &data.ep0_DMA_buffer;
     R32_UEP1_DMA = (uint32_t) &data.buffer[1];
     R32_UEP2_DMA = (uint32_t) &data.buffer[2];
     R32_UEP3_DMA = (uint32_t) &data.buffer[3];
@@ -217,6 +240,8 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init)
     R8_UDEV_CTRL = RB_UD_PD_DIS | RB_UD_PORT_EN;                   // configure USb device
     R8_USB_INT_EN = RB_UIE_SUSPEND | RB_UIE_BUS_RST | RB_UIE_TRANSFER;
     dcd_connect(rhport);
+    data.ep0_tog_in = 0;
+    data.ep0_tog_out = 0;
     return 1;
 }
 
@@ -224,17 +249,65 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init)
 void dcd_int_handler(uint8_t rhport) {
   (void) rhport;
   uint8_t status = R8_USB_INT_FG;
-  if (status & RB_UIF_TRANSFER) {
+  uint8_t int_st = R8_USB_INT_ST; // Capture INT_ST early
+  //printf("USB INT_FG=0x%02x, INT_ST=0x%02x\n", status, int_st); // Log for debugging
+  if (status & RB_UIF_TRANSFER) 
+  {
     uint8_t ep = USBFS_INT_ST_MASK_UIS_ENDP(R8_USB_INT_ST);
     uint8_t token = USBFS_INT_ST_MASK_UIS_TOKEN(R8_USB_INT_ST);
-    
+    //printf("ep = %d, token = %02X\n", ep, token);
+    bool tog_ok = int_st & RB_UIS_TOG_OK;
+    bool setup =R8_USB_INT_ST & RB_UIS_SETUP_ACT; // fuck wch
+    printf("Transfer: ep=%d, token=0x%02x, setup_act=%d, tog_ok=%d\n", ep, token, setup, tog_ok);
+    if(ep == 0)
+    {
+        /*printf("EP0 xfer completed, token = %02X, rx_len = %d\n", token, R8_USB_RX_LEN);
+        for (int i = 0; i < 40; i++)
+        {
+          printf("%02X ", data.buffer[0][TUSB_DIR_OUT][i]);
+        }
+        printf("first 40 bytes of raw buf data end\n");*/
+        //if (R8_USB_RX_LEN == 8)
+        if(setup)
+        {
+          printf("SETUP_ACT: setup\n");
+          if(token == PID_SETUP)
+          {
+            printf("The undefined SETUP token agrees\n");
+          }
+          else 
+          {
+            printf("The undefined SETUP token disagree\n");
+            
+          }
+        }
+        if(setup)
+        {
+          data.ep0_tog_in = 1;
+          data.ep0_tog_out = 1;
+          R8_USB_INT_FG = RB_UIF_TRANSFER;
+          /*R8_UEP0_CTRL = (R8_UEP0_CTRL & ~(MASK_UEP_T_RES | MASK_UEP_R_RES | RB_UEP_AUTO_TOG)) |
+          UEP_T_RES_NAK | UEP_R_RES_ACK; |
+          (data.ep0_tog ? (RB_UEP_R_TOG | RB_UEP_T_TOG) : 0*/
+          //data.ep0_tog = true;
+          /*R8_UEP0_CTRL = (R8_UEP0_CTRL & ~(MASK_UEP_T_RES | MASK_UEP_R_RES | RB_UEP_AUTO_TOG | RB_UEP_R_TOG | RB_UEP_T_TOG)) |
+          UEP_T_RES_NAK | UEP_R_RES_ACK;*/
+          R8_UEP0_CTRL = RB_UEP_R_TOG | RB_UEP_T_TOG | UEP_R_RES_ACK | UEP_T_RES_NAK;
+          dcd_event_setup_received(rhport, &data.buffer[0][TUSB_DIR_OUT][0], true);
+          R8_USB_INT_FG = RB_UIF_TRANSFER;
+          return;
+        }
+        
+    }
     switch (token) {
       case PID_OUT: {
         uint16_t rx_len = R8_USB_RX_LEN;
         update_out(rhport, ep, rx_len);
-        if (ep == 0)
+        if(!tog_ok)
         {
-          data.ep0_tog = !data.ep0_tog;
+            printf("Toggle mismatch on OUT, ep !=0\n");
+            // Resync or NAK
+            //set_endpoint_rx_ctrl(ep, UEP_R_RES_NAK, false);
         }
         
         break;
@@ -242,34 +315,43 @@ void dcd_int_handler(uint8_t rhport) {
 
       case PID_IN:
         update_in(rhport, ep, false);
-        if (ep == 0)
+        if (!tog_ok)
         {
-          data.ep0_tog = !data.ep0_tog;
+          printf("Toggle mismatch on IN, ep !=0\n");
         }
         break;
-
+        /*data.ep0_tog_in = 0;
+        data.ep0_tog_out = 0;
+        R8_USB_INT_FG = RB_UIF_TRANSFER;
+        R8_UEP0_CTRL = (R8_UEP0_CTRL & ~(MASK_UEP_T_RES | MASK_UEP_R_RES | RB_UEP_AUTO_TOG | RB_UEP_R_TOG | RB_UEP_T_TOG)) |
+        UEP_T_RES_NAK | UEP_R_RES_ACK;
+        dcd_event_setup_received(rhport, &data.buffer[0][TUSB_DIR_OUT][0], true);
+        R8_USB_INT_FG = RB_UIF_TRANSFER;
+        return;*/
       case PID_SETUP:
+        printf("Missed a SETUP packet!\n");
         // setup clears stall
-        R8_UEP0_CTRL = (R8_UEP0_CTRL & ~(MASK_UEP_T_RES | MASK_UEP_R_RES | RB_UEP_AUTO_TOG)) |
+        /*R8_UEP0_CTRL = (R8_UEP0_CTRL & ~(MASK_UEP_T_RES | MASK_UEP_R_RES | RB_UEP_AUTO_TOG)) |
                        UEP_T_RES_NAK | UEP_R_RES_ACK |
                        (data.ep0_tog ? (RB_UEP_R_TOG | RB_UEP_T_TOG) : 0);
-
         data.ep0_tog = true;
         dcd_event_setup_received(rhport, &data.buffer[0][TUSB_DIR_OUT][0], true);
-        break;
+        break;*/
     }
-
     R8_USB_INT_FG = RB_UIF_TRANSFER;
   } else if (status & RB_UIF_BUS_RST) {
-    data.ep0_tog = true;
+    data.ep0_tog_in = 0;
+    data.ep0_tog_out = 0;
     data.xfer[0][TUSB_DIR_OUT].max_size = 64;
     data.xfer[0][TUSB_DIR_IN].max_size = 64;
 
     dcd_event_bus_reset(rhport, (R8_UDEV_CTRL & RB_UD_LOW_SPEED) ? TUSB_SPEED_LOW : TUSB_SPEED_FULL, true);
 
     R8_USB_DEV_AD = 0x00;
-    R8_UEP0_CTRL = (R8_UEP0_CTRL & ~(MASK_UEP_R_RES | RB_UEP_AUTO_TOG | RB_UEP_R_TOG | RB_UEP_T_TOG)) |
-                   UEP_R_RES_ACK | (data.ep0_tog ? (RB_UEP_R_TOG | RB_UEP_T_TOG) : 0);
+    /*R8_UEP0_CTRL = (R8_UEP0_CTRL & ~(MASK_UEP_R_RES | RB_UEP_AUTO_TOG | RB_UEP_R_TOG | RB_UEP_T_TOG)) |
+                   UEP_R_RES_ACK | (data.ep0_tog ? (RB_UEP_R_TOG | RB_UEP_T_TOG) : 0)*/;
+    R8_UEP0_CTRL = (R8_UEP0_CTRL & ~(MASK_UEP_R_RES | MASK_UEP_T_RES | RB_UEP_AUTO_TOG | RB_UEP_R_TOG | RB_UEP_T_TOG)) |
+    UEP_R_RES_ACK | UEP_T_RES_NAK;
 
     R8_USB_INT_FG = RB_UIF_BUS_RST;
     
@@ -293,6 +375,7 @@ void dcd_int_disable(uint8_t rhport) {
 void dcd_set_address(uint8_t rhport, uint8_t dev_addr) {
   (void) dev_addr;
   dcd_edpt_xfer(rhport, 0x80, NULL, 0); // ZLP status response
+  //R8_USB_DEV_AD = dev_addr;
 }
 
 void dcd_remote_wakeup(uint8_t rhport) {
@@ -325,9 +408,9 @@ void dcd_edpt0_status_complete(uint8_t rhport, tusb_control_request_t const* req
     R8_USB_DEV_AD = (uint8_t) request->wValue;
   }
   set_endpoint_tx_ctrl(0, UEP_T_RES_NAK, false);
-  data.ep0_tog = !data.ep0_tog;
+  //data.ep0_tog = !data.ep0_tog;
   set_endpoint_rx_ctrl(0, UEP_R_RES_ACK, false);
-  data.ep0_tog = !data.ep0_tog;
+  //data.ep0_tog = !data.ep0_tog;
   
 }
 
@@ -392,12 +475,12 @@ void dcd_edpt_stall(uint8_t rhport, uint8_t ep_addr) {
   if (ep == 0) {
     if (dir == TUSB_DIR_OUT) {
       set_endpoint_rx_ctrl(ep,UEP_R_RES_STALL , false);
-      data.ep0_tog = !data.ep0_tog;
+      data.ep0_tog_out = !data.ep0_tog_out;
     } else {
       //EP_TX_LEN(ep) = 0;
       set_endpoint_t_len(ep, 0);
       set_endpoint_tx_ctrl(ep, UEP_T_RES_STALL, false);
-      data.ep0_tog = !data.ep0_tog;
+      data.ep0_tog_in = !data.ep0_tog_in;
     }
   } else {
     if (dir == TUSB_DIR_OUT) {
@@ -415,7 +498,7 @@ void dcd_edpt_clear_stall(uint8_t rhport, uint8_t ep_addr) {
   if (ep == 0) {
     if (dir == TUSB_DIR_OUT) {
       set_endpoint_rx_ctrl(ep,UEP_R_RES_ACK , false);
-      data.ep0_tog = !data.ep0_tog;
+      data.ep0_tog_out = !data.ep0_tog_out;
     }
   } else {
     if (dir == TUSB_DIR_OUT) {
