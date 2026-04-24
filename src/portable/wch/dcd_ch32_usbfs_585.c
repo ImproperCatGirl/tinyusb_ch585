@@ -267,13 +267,12 @@ void dcd_int_handler(uint8_t rhport) {
 
   if(mis_busy != fg_busy)
   {
-    PRINT_("Registers do not agree on if the packet token is SETUP\n");
+    PRINT_("Registers do not agree on if the SIE is busy\n");
     //while(1);
     //return;
   }
   if((mis_busy == 1) || (fg_busy == 1))
   {
-    PRINT_("one of these register busy");
     return;
   }
   //dcd_int_disable(rhport);
