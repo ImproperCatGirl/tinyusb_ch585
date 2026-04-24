@@ -34,7 +34,10 @@
 
 #include "device/usbd.h"
 #include "device/usbd_pvt.h"
-
+/**
+#if TOTAL_DRIVER_COUNT == 0
+#error "TOTAL_DRIVER_COUNT is zero—tusb_config.h not applied!"
+#endif*/
 //--------------------------------------------------------------------+
 // USBD Configuration
 //--------------------------------------------------------------------+
@@ -625,8 +628,9 @@ void tud_task_ext(uint32_t timeout_ms, bool in_isr) {
     if (event.event_id == DCD_EVENT_SETUP_RECEIVED) TU_LOG_USBD("\r\n"); // extra line for setup
     TU_LOG_USBD("USBD %s ", event.event_id < DCD_EVENT_COUNT ? _usbd_event_str[event.event_id] : "CORRUPTED");
 #endif
-
+    printf("event_id = %d\n", event.event_id);
     switch (event.event_id) {
+      
       case DCD_EVENT_BUS_RESET:
         TU_LOG_USBD(": %s Speed\r\n", tu_str_speed[event.bus_reset.speed]);
         usbd_reset(event.rhport);
@@ -642,6 +646,7 @@ void tud_task_ext(uint32_t timeout_ms, bool in_isr) {
       case DCD_EVENT_SETUP_RECEIVED:
         TU_ASSERT(_usbd_queued_setup > 0,);
         _usbd_queued_setup--;
+        printf("SETUP received, _usbd_queued_setup=%d\n", _usbd_queued_setup);
         TU_LOG_BUF(CFG_TUD_LOG_LEVEL, &event.setup_received, 8);
         if (_usbd_queued_setup) {
           TU_LOG_USBD("  Skipped since there is other SETUP in queue\r\n");
@@ -1009,6 +1014,8 @@ static bool process_control_request(uint8_t rhport, tusb_control_request_t const
 // This function parse configuration descriptor & open drivers accordingly
 static bool process_set_config(uint8_t rhport, uint8_t cfg_num)
 {
+  printf("SET_CONFIGURATION: cfg_num=%d, TOTAL_DRIVER_COUNT=%d\n", cfg_num, TOTAL_DRIVER_COUNT);
+  
   // index is cfg_num-1
   tusb_desc_configuration_t const * desc_cfg = (tusb_desc_configuration_t const *) tud_descriptor_configuration_cb(cfg_num-1);
   TU_ASSERT(desc_cfg != NULL && desc_cfg->bDescriptorType == TUSB_DESC_CONFIGURATION);
@@ -1030,7 +1037,7 @@ static bool process_set_config(uint8_t rhport, uint8_t cfg_num)
     {
       tusb_desc_interface_assoc_t const * desc_iad = (tusb_desc_interface_assoc_t const *) p_desc;
       assoc_itf_count = desc_iad->bInterfaceCount;
-
+      printf("IAD found: bFirstInterface=%d, bInterfaceCount=%d\n", desc_iad->bFirstInterface, desc_iad->bInterfaceCount);
       p_desc = tu_desc_next(p_desc); // next to Interface
 
       // IAD's first interface number and class should match with opened interface
@@ -1052,6 +1059,7 @@ static bool process_set_config(uint8_t rhport, uint8_t cfg_num)
 
       if ( (sizeof(tusb_desc_interface_t) <= drv_len)  && (drv_len <= remaining_len) )
       {
+        printf("  %s opened, itf_num=%d, drv_len=%u\n", driver->name, desc_itf->bInterfaceNumber, drv_len);
         // Open successfully
         TU_LOG_USBD("  %s opened\r\n", driver->name);
 
@@ -1083,7 +1091,7 @@ static bool process_set_config(uint8_t rhport, uint8_t cfg_num)
         for(uint8_t i=0; i<assoc_itf_count; i++)
         {
           uint8_t const itf_num = desc_itf->bInterfaceNumber+i;
-
+          printf("Binding interface: itf_num=%d, drv_id=%d, current_itf2drv=%d\n", itf_num, drv_id, _usbd_dev.itf2drv[itf_num]);
           // Interface number must not be used already
           TU_ASSERT(DRVID_INVALID == _usbd_dev.itf2drv[itf_num]);
           _usbd_dev.itf2drv[itf_num] = drv_id;
@@ -1094,7 +1102,7 @@ static bool process_set_config(uint8_t rhport, uint8_t cfg_num)
 
         // next Interface
         p_desc += drv_len;
-
+        printf("Advanced p_desc to %p\n", p_desc);
         break; // exit driver find loop
       }
     }
@@ -1257,6 +1265,7 @@ TU_ATTR_FAST_FUNC void dcd_event_handler(dcd_event_t const* event, bool in_isr) 
     case DCD_EVENT_SETUP_RECEIVED:
       _usbd_queued_setup++;
       send = true;
+      printf("\nsetup recv'ed\n");
       break;
 
     case DCD_EVENT_XFER_COMPLETE: {

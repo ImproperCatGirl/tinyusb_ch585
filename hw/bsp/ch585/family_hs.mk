@@ -23,7 +23,7 @@ CFLAGS += -Wno-error=strict-prototypes -Wno-error=undef -Wno-error=cast-qual -Wn
 #these flangs are used to supress WCH's low quality SDK, which is full of warnings that will otherwise stop the building process
 
 
-SPEED ?= full
+SPEED ?= high
 
 CFLAGS += \
 	-g\
@@ -32,22 +32,25 @@ CFLAGS += \
 	-DINT_SOFT\
 	-DCFG_TUSB_DEBUG=3
 
+CFLAGS += -DCFG_TUD_WCH_USBIP_USBHS_585=1
 
-CFLAGS += -DCFG_TUD_WCH_USBIP_USBFS_585=1
+
+
+
 
 LDFLAGS_GCC += \
 	-nostdlib -nostartfiles \
   --specs=nosys.specs --specs=nano.specs \
   -T $(TOP)/$(SDK_SRC_DIR)/Ld/Link.ld\
   -Wl,--start-group -L$(TOP)/$(SDK_SRC_DIR)/StdPeriphDriver \
-	-lISP585  # This part of the SDK is not open sourced.
-	-Wl,--trace-symbol=FLASH_EEPROM_CMD\
-	--end-group
+           -lISP585 \
+		   
+	-Wl,--trace-symbol=FLASH_EEPROM_CMD
 		   
 
 
 SRC_C += \
-	src/portable/wch/dcd_ch32_usbfs_585.c \
+	src/portable/wch/dcd_ch32_usbhs_585.c \
 	$(wildcard $(TOP)/$(SDK_SRC_DIR)/StdPeriphDriver/*.c)
 
 
@@ -58,6 +61,7 @@ INC += \
 	$(TOP)/$(BOARD_PATH) \
 	$(TOP)/$(SDK_SRC_DIR)/RVMSIS/\
 	$(TOP)/$(SDK_SRC_DIR)/StdPeriphDriver/inc
+	
 
 
 OPENOCD_WCH_OPTION=-f $(TOP)/$(FAMILY_PATH)/wch-riscv.cfg

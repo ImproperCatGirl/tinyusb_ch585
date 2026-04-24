@@ -1,0 +1,819 @@
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2022 Greg Davill
+ * Copyright (c) 2023 Denis Krasutski
+ * Copyright (c) 2025 [Your Name]
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ *
+ * This file is part of the TinyUSB stack.
+ */
+
+ #include "CH58x_common.h"
+#include "tusb_option.h"
+
+ 
+#include "CH585SFR.h" 
+ #include "device/dcd.h"
+ 
+ // Maximum number of bi-directional endpoints including EP0
+ #define EP_MAX  16
+ #define EP0_SIZE 64 // USB 2.0 high-speed max packet size for EP0
+ 
+ #define XFER_CTL_BASE(_ep, _dir) &xfer_status[_ep][_dir]
+ 
+ #define USBHS_RX_LEN_BASE   0x4000907C
+ 
+ #define USBHS_RX_LEN(ep)    (*((PUINT16V)(USBHS_RX_LEN_BASE + ((ep) * 4))))
+
+ #define USBHS_MAX_LEN_BASE    0x4000905C
+ 
+ #define USBHS_MAX_LEN(ep)     (*((PUINT32V)(USBHS_MAX_LEN_BASE + ((ep) * 4))))
+ 
+ #define UEPn_OFFSET(ep_num)     ((ep_num - 1) * 4) // Offset for EP1–7
+
+ #define UEPn_TX_DMA_BASE        (0x40009040) // EP1 TX DMA
+ #define UEPn_RX_DMA_BASE        (0x40009024) // EP1 RX DMA
+
+ #define R32_U2EPn_TX_DMA(ep_num)    (*(volatile uint32_t *)(UEPn_TX_DMA_BASE + UEPn_OFFSET(ep_num)))
+ #define R32_U2EPn_RX_DMA(ep_num)    (*(volatile uint32_t *)(UEPn_RX_DMA_BASE + UEPn_OFFSET(ep_num)))
+
+ #define UEPn_TX_CTRL_BASE       (0x400090A2) // EP1 TX CTRL
+ #define UEPn_RX_CTRL_BASE       (0x400090A3) // EP1 RX CTRL
+
+ #define R8_U2EPn_TX_CTRL(ep_num)    (*(volatile uint8_t *)(UEPn_TX_CTRL_BASE + UEPn_OFFSET(ep_num)))
+ #define R8_U2EPn_RX_CTRL(ep_num)    (*(volatile uint8_t *)(UEPn_RX_CTRL_BASE + UEPn_OFFSET(ep_num))) 
+
+ 
+ #define USBHS_TX_BASE 0x4000909C
+ 
+ #define USBHS_TX_LEN(ep)     (*((PUINT16V)(USBHS_TX_BASE + ((ep) * 4))))
+
+ #define UEPn_DMA_MASK           (0x01FFFF)
+#define UEPn_MAX_LEN_MASK       (0x007F)
+#define UEPn_T_LEN_MASK         (0xFFFF)
+#define UEPn_RX_LEN_MASK        (0xFFFF)
+ 
+ int ep0_out_toggle = 0;
+ int ep0_in_toggle = 0;
+
+volatile bool unlikely = 0;
+uint8_t pending_addr = 0;
+
+ // Transfer control structure for tracking IN/OUT transfers
+ typedef struct {
+   uint8_t* buffer;       // Buffer for data transfer
+   uint16_t total_len;    // Total bytes to transfer
+   uint16_t queued_len;   // Bytes already transferred
+   uint16_t max_size;     // Max packet size for the endpoint
+   bool is_last_packet;   // True if the last packet of the transfer is sent/received
+ } xfer_ctl_t;
+ 
+ // Response types for endpoint transactions
+ typedef enum {
+   EP_RESPONSE_ACK,
+   EP_RESPONSE_NAK,
+   EP_RESPONSE_STALL,
+ } ep_response_list_t;
+ 
+ // Transfer status for all endpoints (IN and OUT directions)
+ static xfer_ctl_t xfer_status[EP_MAX][2];
+ 
+ // EP0 buffer for control transfers
+ TU_ATTR_ALIGNED(4) static uint8_t ep0_buffer[EP0_SIZE];
+
+ #define MAX_EP_NUM 7
+#define MAX_EP_PACKET_SIZE 512 // Supports HID (64) and bulk (512)
+static uint8_t ep_in_buffers[MAX_EP_NUM][MAX_EP_PACKET_SIZE] __attribute__((aligned(4)));
+static uint8_t ep_out_buffers[MAX_EP_NUM][MAX_EP_PACKET_SIZE] __attribute__((aligned(4)));
+
+ void ep_set_in_toggle(int ep_num, int ep_toggle)
+ {
+  if(ep_num != 0) return;
+  R8_U2EP0_TX_CTRL |= (ep_toggle << 2);
+  
+ }
+
+void  ep_set_out_toggle(int ep_num, int ep_toggle)
+ {
+  if(ep_num != 0) return;
+  R8_U2EP0_RX_CTRL |= (ep_toggle << 2);
+ }
+
+// Set OUT response and toggle for Endpoint 0
+void ep_set_out_response(uint8_t ep_num, ep_response_list_t response_type) {
+  //if (ep_num != 0) return; // Only handle EP0
+  if(ep_num == 0)
+  {
+    uint8_t reg_val = R8_U2EP0_RX_CTRL & ~(USBHS_UEP_R_RES_MASK | USBHS_UEP_R_TOG_MASK); // Preserve other bits
+
+    // Set response
+    switch (response_type) {
+      case EP_RESPONSE_ACK:
+        reg_val |= (0x2 << 0); // 10: ACK
+        reg_val |= (ep0_out_toggle << 2); // Set expected toggle (DATA0 or DATA1)
+        break;
+      case EP_RESPONSE_NAK:
+        reg_val |= (0x0 << 0); // 00: NAK
+        reg_val |= (ep0_out_toggle << 2); // Maintain current toggle
+        break;
+      case EP_RESPONSE_STALL:
+        reg_val |= (0x1 << 0); // 01: STALL
+        // No toggle change for STALL
+        break;
+      default:
+        return; // Invalid response
+    }
+    // Write to register
+    R8_U2EP0_RX_CTRL = reg_val;
+    return;
+  }
+  else if (ep_num <= 7) 
+  {
+    //printf("ep_num that should not appear in SETUP = %d\n",ep_num);
+    //DelayUs(1000);
+    unlikely = 1;
+    uint8_t reg_val = 0;
+    // Non-EP0: Use DMA and auto-toggle
+    xfer_ctl_t *xfer = &xfer_status[ep_num][TUSB_DIR_OUT];
+    if (response_type == EP_RESPONSE_ACK && xfer->buffer && xfer->total_len > 0) 
+    {
+      R32_U2EPn_RX_DMA(ep_num) = (uint32_t)xfer->buffer & UEPn_DMA_MASK ; // Set DMA address
+      USBHS_MAX_LEN(ep_num) = xfer->max_size & UEPn_MAX_LEN_MASK; // Set max packet size
+      reg_val |= (0x2 << 0); // Set ACK
+    } 
+    else if (response_type == EP_RESPONSE_NAK) 
+    {
+      reg_val |= (0x0 << 0); // Set NAK
+    } 
+    else if (response_type == EP_RESPONSE_STALL) 
+    {
+      reg_val |= (0x1 << 0); // Set STALL
+    }
+    R8_U2EPn_RX_CTRL(ep_num) = reg_val;
+  }
+
+}
+
+// Set IN response and toggle for Endpoint 0
+void ep_set_in_response(uint8_t ep_num, ep_response_list_t response_type) {
+  //if (ep_num != 0) return; // Only handle EP0
+  if(ep_num == 0)
+  {
+    uint8_t reg_val = R8_U2EP0_TX_CTRL & ~(USBHS_UEP_T_RES_MASK | USBHS_UEP_T_TOG_MASK); // Preserve other bits
+
+    // Set response
+    switch (response_type) {
+      case EP_RESPONSE_ACK:
+        reg_val |= (0x2 << 0); // 10: ACK
+        reg_val |= (ep0_in_toggle << 2); // Set toggle for next IN packet (DATA0 or DATA1)
+        break;
+      case EP_RESPONSE_NAK:
+        reg_val |= (0x0 << 0); // 00: NAK
+        reg_val |= (ep0_in_toggle << 2); // Maintain current toggle for retry
+        break;
+      case EP_RESPONSE_STALL:
+        reg_val |= (0x1 << 0); // 01: STALL
+        // No toggle change for STALL
+        break;
+      default:
+        return; // Invalid response
+    }
+
+    // Write to register
+    R8_U2EP0_TX_CTRL = reg_val;
+    return;
+  }
+  else if (ep_num <= 7) 
+  {
+    uint8_t reg_val = 0;
+    // Non-EP0: Use DMA and auto-toggle
+    xfer_ctl_t *xfer = &xfer_status[ep_num][TUSB_DIR_IN];
+    if (response_type == EP_RESPONSE_ACK && xfer->buffer && xfer->total_len > 0) 
+    {
+      R32_U2EPn_TX_DMA(ep_num) = (uint32_t)xfer->buffer & UEPn_DMA_MASK; // Set DMA address
+      USBHS_TX_LEN(ep_num) = tu_min16(xfer->total_len - xfer->queued_len, xfer->max_size) & UEPn_T_LEN_MASK;
+      reg_val |= (0x2 << 0); // Set ACK
+    } 
+    else if (response_type == EP_RESPONSE_NAK) 
+    {
+      reg_val |= (0x0 << 0); // Set NAK
+    } 
+    else if (response_type == EP_RESPONSE_STALL) 
+    {
+      reg_val |= (0x1 << 0); // Set STALL
+    }
+    R8_U2EPn_TX_CTRL(ep_num) = reg_val;
+  }
+
+
+}
+
+
+
+
+ // Helper function to set endpoint response and manage toggle
+ static void ep_set_response_and_toggle(uint8_t ep_num, tusb_dir_t ep_dir, ep_response_list_t response_type) {
+   //if (ep_num != 0) return; // Only handle EP0
+   if (ep_dir == TUSB_DIR_IN) {
+     if (response_type == EP_RESPONSE_ACK) 
+     {
+       // For IN transfers, prepare to send data or ZLP
+       if (xfer_status[ep_num][TUSB_DIR_IN].queued_len == 0 && xfer_status[ep_num][TUSB_DIR_IN].total_len == 0) 
+       {
+         // Zero-length packet (ZLP) for Status Stage uses DATA1
+         if(ep_num == 0)
+         {
+          ep0_in_toggle = 1;
+         }
+       } 
+       else 
+       {
+        if(ep_num == 0)
+        {
+          ep0_in_toggle ^= 1;
+        }
+         // Toggle after successful ACK
+         
+       }
+       // Set endpoint IN response to ACK
+       ep_set_in_response(ep_num, EP_RESPONSE_ACK);
+     } else if (response_type == EP_RESPONSE_NAK) {
+       // No toggle change for NAK
+       ep_set_in_response(ep_num, EP_RESPONSE_NAK);
+     } else if (response_type == EP_RESPONSE_STALL) {
+       // No toggle change for STALL
+       ep_set_in_response(ep_num, EP_RESPONSE_STALL);
+     }
+   } else { // TUSB_DIR_OUT
+     if (response_type == EP_RESPONSE_ACK) {
+       // For OUT transfers, toggle after successful reception
+       if (xfer_status[ep_num][TUSB_DIR_OUT].queued_len == xfer_status[ep_num][TUSB_DIR_OUT].total_len) {
+         // Last packet received, prepare for Status Stage (DATA1 expected)
+         if(ep_num == 0)
+         {
+          ep0_out_toggle = 1;
+         }
+         
+       } else {
+        if(ep_num == 0)
+        {
+          ep0_out_toggle ^= 1;
+        }
+         // Toggle for next expected packet
+         
+       }
+       // Set endpoint OUT response to ACK
+       ep_set_out_response(ep_num, EP_RESPONSE_ACK);
+     } else if (response_type == EP_RESPONSE_NAK) {
+       // No toggle change for NAK
+       ep_set_out_response(ep_num, EP_RESPONSE_NAK);
+     } else if (response_type == EP_RESPONSE_STALL) {
+       // No toggle change for STALL
+       ep_set_out_response(ep_num, EP_RESPONSE_STALL);
+     }
+   }
+ }
+ 
+ // Helper function to prepare and send/receive a data packet
+ static void xfer_data_packet(uint8_t ep_num, tusb_dir_t ep_dir, xfer_ctl_t* xfer) {
+   //if (ep_num != 0) return; // Only handle EP0
+  if(ep_num == 0)
+  {
+    if (ep_dir == TUSB_DIR_IN) {
+      // Calculate bytes to send
+      uint16_t remaining = xfer->total_len - xfer->queued_len;
+      uint16_t next_tx_size = TU_MIN(remaining, xfer->max_size);
+  
+      // Copy data to EP0 buffer
+      memcpy(ep0_buffer, &xfer->buffer[xfer->queued_len], next_tx_size);
+  
+      // Set transfer length
+      //ep_set_tx_length(ep_num, next_tx_size);
+      USBHS_TX_LEN(ep_num) = next_tx_size; 
+      // Update transfer status
+      xfer->queued_len += next_tx_size;
+      if (xfer->queued_len == xfer->total_len) {
+        xfer->is_last_packet = true;
+      }
+  
+      // Set data toggle (DATA0 or DATA1 based on ep0_in_toggle)
+      ep_set_in_toggle(ep_num, ep0_in_toggle);
+      // Enable IN transfer with ACK response
+      ep_set_response_and_toggle(ep_num, TUSB_DIR_IN, EP_RESPONSE_ACK);
+    } else { // TUSB_DIR_OUT
+      // Calculate bytes to receive
+      uint16_t left_to_receive = xfer->total_len - xfer->queued_len;
+      uint16_t max_possible_rx_size = TU_MIN(xfer->max_size, left_to_receive);
+  
+      if (max_possible_rx_size == left_to_receive) {
+        xfer->is_last_packet = true;
+      }
+  
+      // Set maximum receive length
+      //ep_set_rx_max_length(ep_num, max_possible_rx_size);
+      USBHS_MAX_LEN(ep_num) = max_possible_rx_size;
+      // Set expected data toggle (DATA0 or DATA1 based on ep0_out_toggle)
+      ep_set_out_toggle(ep_num, ep0_out_toggle);
+      // Enable OUT transfer with ACK response
+      ep_set_response_and_toggle(ep_num, TUSB_DIR_OUT, EP_RESPONSE_ACK);
+    }
+  }
+  else 
+  {
+    // Non-EP0: Use DMA
+    if (ep_dir == TUSB_DIR_IN) {
+      // Update queued length for IN transfer, DMA handles data
+      xfer->queued_len += tu_min16(xfer->total_len - xfer->queued_len, xfer->max_size);
+      ep_set_in_response(ep_num, EP_RESPONSE_ACK);
+    } else {
+      // Read received length from hardware, update queued length
+      uint16_t rx_len = USBHS_RX_LEN(ep_num) & UEPn_RX_LEN_MASK;
+      xfer->queued_len += rx_len;
+      ep_set_out_response(ep_num, EP_RESPONSE_ACK);
+    }
+  }
+   
+ }
+ 
+ // Initialize USB device controller
+ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
+   (void)rhport;
+   (void)rh_init;
+   printf("dcd_init: rhport=%d\n", rhport);
+   // Clear transfer status
+   memset(&xfer_status, 0, sizeof(xfer_status));
+ 
+   // Disable host mode and enable device mode
+    R8_USBHS_PLL_CTRL = USBHS_PLL_EN;
+    R16_PIN_CONFIG |= RB_PIN_USB2_EN;
+    R8_USB2_CTRL = USBHS_UD_RST_LINK | USBHS_UD_PHY_SUSPENDM;
+    R8_USB2_INT_EN = USBHS_UDIE_BUS_RST | USBHS_UDIE_SUSPEND | USBHS_UDIE_BUS_SLEEP | USBHS_UDIE_LPM_ACT | USBHS_UDIE_TRANSFER | USBHS_UDIE_LINK_RDY;
+
+ 
+   // Configure for high-speed mode
+   //usb_set_speed(TUSB_SPEED_HIGH);
+ 
+   // Enable necessary interrupts (SETUP, TRANSFER, BUS_RESET, SUSPEND)
+   //usb_enable_interrupt(SETUP_ACT_EN | TRANSFER_EN | BUS_RST_EN | SUSPEND_EN);
+ 
+   // Configure EP0 for control transfers (IN and OUT enabled, no isochronous)
+   //ep_enable_in(ep_num: 0);
+   //ep_enable_out(ep_num: 0);
+   //ep_set_type(ep_num: 0, CONTROL_TRANSFER);
+   //R16_U2EP_RX_EN = USBHS_UEP_RX_EN;
+   R16_U2EP_RX_EN = RB_EP0_EN;
+    //R16_U2EP_TX_EN = USBHS_UEP_RX_EN; // also 0xFFFF, WCH's header is incomplete, but this EN logic is the same
+    R16_U2EP_TX_EN = RB_EP0_EN;
+    R8_U2EP0_TX_CTRL = USBHS_UEP_T_RES_ACK;
+    R8_U2EP0_RX_CTRL = USBHS_UEP_R_RES_ACK;
+ 
+   // Initialize EP0 transfer status
+   xfer_status[0][TUSB_DIR_OUT].max_size = EP0_SIZE;
+   xfer_status[0][TUSB_DIR_IN].max_size = EP0_SIZE;
+ 
+   // Set EP0 buffer address
+   //ep_set_buffer_address(ep_num: 0, buffer: ep0_buffer);
+   R32_U2EP0_DMA  = (uint32_t) ep0_buffer;
+ 
+   // Set EP0 max packet size
+   //ep_set_max_length(ep_num: 0, size: EP0_SIZE);
+   R32_U2EP0_MAX_LEN = EP0_SIZE;
+   // Reset device address
+   //usb_set_device_address(0);
+   R8_USB2_DEV_AD  = 0;
+   R8_USB2_BASE_MODE = USBHS_UD_SPEED_HIGH;
+   R8_USB2_CTRL = USBHS_UD_DEV_EN | USBHS_UD_DMA_EN | USBHS_UD_PHY_SUSPENDM;
+   R16_U2EP_T_TOG_AUTO = USBHS_UEP_T_TOG_AUTO; 
+  R16_U2EP_R_TOG_AUTO = USBHS_UEP_R_TOG_AUTO; 
+ 
+   // Enable USB device pull-up
+   //usb_enable_pullup();
+ 
+   // Initialize toggles
+   ep0_in_toggle = 0;
+   ep0_out_toggle = 0;
+ 
+   // Set EP0 to NAK by default
+   ep_set_in_response( 0, EP_RESPONSE_NAK);
+   ep_set_out_response( 0, EP_RESPONSE_NAK);
+ 
+   return true;
+ }
+ 
+ // Enable USB interrupts
+ void dcd_int_enable(uint8_t rhport) {
+   (void)rhport;
+   PFIC_EnableIRQ( USB2_DEVICE_IRQn );
+ }
+ 
+ // Disable USB interrupts
+ void dcd_int_disable(uint8_t rhport) {
+   (void)rhport;
+   PFIC_DisableIRQ( USB2_DEVICE_IRQn );
+ }
+ 
+ // Close all endpoints except EP0
+ void dcd_edpt_close_all(uint8_t rhport) {
+   (void)rhport;
+  //TODO
+   /*for (uint8_t ep = 1; ep < EP_MAX; ep++) {
+     // Disable IN and OUT for non-EP0 endpoints
+     ep_disable_in(ep);
+     ep_disable_out(ep);
+     ep_set_in_response(ep, EP_RESPONSE_NAK);
+     ep_set_out_response(ep, EP_RESPONSE_NAK);
+     ep_set_tx_length(ep, 0);
+     ep_set_rx_max_length(ep, 0);
+   }
+ 
+   // Ensure EP0 remains enabled
+   ep_enable_in(ep_num: 0);
+   ep_enable_out(ep_num: 0);*/
+ }
+ 
+ // Set device address (handled via control transfer)
+ 
+ void dcd_set_address(uint8_t rhport, uint8_t dev_addr) {
+   (void)rhport;
+   
+   // Respond with ZLP for Status Stage
+   dcd_edpt_xfer(rhport, 0x80, NULL, 0);
+   R8_USB2_DEV_AD = dev_addr;
+ }
+ 
+ // Handle remote wakeup
+ void dcd_remote_wakeup(uint8_t rhport) {
+   (void)rhport;
+   //TODO
+   //usb_signal_remote_wakeup();
+ }
+ 
+ // Enable/disable SOF interrupts
+ void dcd_sof_enable(uint8_t rhport, bool en) {
+   (void)rhport;
+   if (en) {
+     //usb_enable_interrupt(SOF_ACT_EN);
+     R8_U2H_INT_EN |= USBHS_UHIE_SOF_ACT;
+   } else {
+     //usb_disable_interrupt(SOF_ACT_EN);
+     R8_U2H_INT_EN &= ~USBHS_UHIE_SOF_ACT;
+   }
+ }
+ 
+ // Complete Status Stage of SET_ADDRESS request
+ void dcd_edpt0_status_complete(uint8_t rhport, tusb_control_request_t const* request) {
+   (void)rhport;
+ 
+   if (request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_DEVICE &&
+       request->bmRequestType_bit.type == TUSB_REQ_TYPE_STANDARD &&
+       request->bRequest == TUSB_REQ_SET_ADDRESS) {
+     // Set device address after Status Stage
+     DelayUs(50); // likely a hardware issue, a small delay stablized the USB controller, otherwise it will fail a SET_ADDRESS stage
+     R8_USB2_DEV_AD = ((uint8_t)request->wValue);
+   }
+ 
+   // Reset toggles for next control transfer
+   ep0_in_toggle = 0;
+   ep0_out_toggle = 0;
+ 
+   // Set EP0 to NAK for both directions
+   ep_set_in_response(0, EP_RESPONSE_NAK);
+   ep_set_out_response(0, EP_RESPONSE_NAK);
+ }
+ 
+ // Open an endpoint (for non-EP0, simplified for EP0)
+ bool dcd_edpt_open(uint8_t rhport, tusb_desc_endpoint_t const* desc_edpt) {
+   (void)rhport;
+   printf("dcd_edpt_open: rhport=%d, ep_num=%d, dir=%d\n", 
+    rhport, tu_edpt_number(desc_edpt->bEndpointAddress), tu_edpt_dir(desc_edpt->bEndpointAddress));
+   uint8_t const ep_num = tu_edpt_number(desc_edpt->bEndpointAddress);
+   tusb_dir_t const dir = tu_edpt_dir(desc_edpt->bEndpointAddress);
+ 
+   TU_ASSERT(ep_num < EP_MAX);
+ 
+   if (ep_num == 0) {
+     // EP0 is always open for control transfers
+     return true;
+   }
+   printf("Opening endpoint: ep_num=%d, dir=%d\n", ep_num, dir);
+   xfer_ctl_t* xfer = &xfer_status[ep_num][dir];
+   xfer->max_size = tu_edpt_packet_size(desc_edpt);
+ 
+   TU_ASSERT(ep_num <= MAX_EP_NUM); // Support EP1–7
+  TU_ASSERT(tu_edpt_packet_size(desc_edpt) <= MAX_PACKET_SIZE); // Ensure buffer size is sufficient
+
+  xfer_ctl_t* xfer_local = &xfer_status[ep_num][dir];
+  xfer_local->max_size = tu_edpt_packet_size(desc_edpt);
+  xfer_local->buffer = (dir == TUSB_DIR_IN) ? ep_in_buffers[ep_num - 1] : ep_out_buffers[ep_num - 1];
+  xfer_local->total_len = 0;
+  xfer_local->queued_len = 0;
+  xfer_local->is_last_packet = false;
+
+  if (dir == TUSB_DIR_OUT) {
+    // Configure OUT endpoint for interrupt or bulk transfers
+    R32_U2EPn_RX_DMA(ep_num) = (uint32_t)xfer_local->buffer & UEPn_DMA_MASK;
+    USBHS_MAX_LEN(ep_num) = xfer_local->max_size & UEPn_MAX_LEN_MASK;
+    R8_U2EPn_RX_CTRL(ep_num) = USBHS_UEP_R_TOG_MASK | (0x0 << 0); // Auto-toggle, NAK
+    R16_U2EP_RX_EN |= (1 << ep_num); // Enable RX for this endpoint
+    ep_set_out_response(ep_num, EP_RESPONSE_NAK);
+  } else {
+    // Configure IN endpoint for interrupt or bulk transfers
+    R32_U2EPn_TX_DMA(ep_num) = (uint32_t)xfer_local->buffer & UEPn_DMA_MASK;
+    USBHS_MAX_LEN(ep_num) = 0;
+    R8_U2EPn_TX_CTRL(ep_num) = USBHS_UEP_T_TOG_MASK | (0x0 << 0); // Auto-toggle, NAK
+    R16_U2EP_TX_EN |= (1 << ep_num); // Enable TX for this endpoint
+    ep_set_response_and_toggle(ep_num, dir, EP_RESPONSE_NAK);
+  }
+
+  // Small delay to address CH585/CH584 hardware quirk (~1 us at 60 MHz)
+  //for (volatile uint32_t i = 0; i < 60; i++) {}
+  DelayUs(1);
+
+  printf("Opened endpoint: ep_num=%d, dir=%d, max_size=%d\n", ep_num, dir, xfer_local->max_size);
+  return true;
+ }
+ 
+ // Close an endpoint
+ void dcd_edpt_close(uint8_t rhport, uint8_t ep_addr) {
+   (void)rhport;
+   (void)ep_addr;
+  //TODO
+   /*uint8_t const ep_num = tu_edpt_number(ep_addr);
+   tusb_dir_t const dir = tu_edpt_dir(ep_addr);
+ 
+   if (dir == TUSB_DIR_OUT) {
+     ep_set_out_response(ep_num, EP_RESPONSE_NAK);
+     //ep_set_rx_max_length(ep_num, 0);
+     USBHS_MAX_LEN(ep_num) = 0;
+     ep_disable_out(ep_num);
+   } else {
+     ep_set_in_response(ep_num, EP_RESPONSE_NAK);
+     ep_set_tx_length(ep_num, 0);
+     ep_disable_in(ep_num);
+   }*/
+ }
+ 
+ // Stall an endpoint
+ void dcd_edpt_stall(uint8_t rhport, uint8_t ep_addr) {
+   (void)rhport;
+  (void) ep_addr;
+  //TODO
+   uint8_t const ep_num = tu_edpt_number(ep_addr);
+   tusb_dir_t const dir = tu_edpt_dir(ep_addr);
+ 
+   if (dir == TUSB_DIR_OUT) {
+     ep_set_out_response(ep_num, EP_RESPONSE_STALL);
+   } else {
+     ep_set_in_response(ep_num, EP_RESPONSE_STALL);
+     //ep_set_tx_length(ep_num, 0);
+     USBHS_TX_LEN(ep_num) = 0;
+   }
+ }
+ 
+ // Clear stall on an endpoint
+ void dcd_edpt_clear_stall(uint8_t rhport, uint8_t ep_addr) {
+   (void)rhport;
+  (void) ep_addr;
+   uint8_t const ep_num = tu_edpt_number(ep_addr);
+   tusb_dir_t const dir = tu_edpt_dir(ep_addr);
+ 
+   if (dir == TUSB_DIR_OUT) {
+     ep_set_out_response(ep_num, EP_RESPONSE_NAK);
+   } else {
+     ep_set_in_response(ep_num, EP_RESPONSE_NAK);
+   }
+ }
+ 
+ // Initiate a transfer on an endpoint
+ bool dcd_edpt_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t* buffer, uint16_t total_bytes) {
+   (void)rhport;
+ 
+   uint8_t const ep_num = tu_edpt_number(ep_addr);
+   tusb_dir_t const dir = tu_edpt_dir(ep_addr);
+ 
+   xfer_ctl_t* xfer = &xfer_status[ep_num][dir];
+   xfer->buffer = buffer;
+   xfer->total_len = total_bytes;
+   xfer->queued_len = 0;
+   xfer->is_last_packet = false;
+ 
+   xfer_data_packet(ep_num, dir, xfer);
+ 
+   return true;
+ }
+ 
+
+
+ // Interrupt handler// Interrupt handler
+void dcd_int_handler(uint8_t rhport) {
+  (void)rhport;
+  printf("USB Interrupt\n");
+  // Read interrupt flags
+  uint8_t int_flag = R8_USB2_INT_FG;
+  uint8_t int_status = R8_USB2_INT_ST;
+  if (int_flag & USBHS_UDIF_TRANSFER) {
+    
+    // Transfer complete (IN, OUT, or SETUP)
+    //uint8_t token = usb_get_token_type(); // Assume chip provides token (IN/OUT)
+    uint8_t ep_dir = (int_status & USBHS_UDIS_EP_DIR) >> 4;
+    // 1 = IN 0 = OUT/SETUP
+    //uint8_t ep_num = usb_get_endpoint_number(); // Assume chip provides endpoint number
+    uint8_t ep_num = int_status & USBHS_UDIS_EP_ID_MASK;
+    //tusb_dir_t ep_dir = (token == TOKEN_PID_IN) ? TUSB_DIR_IN : TUSB_DIR_OUT;
+    uint8_t ep_addr = tu_edpt_addr(ep_num, ep_dir);
+    xfer_ctl_t* xfer = &xfer_status[ep_num][ep_dir];
+    /*if (ep_num == 0)
+    {
+      printf("EP0 xfer completed, dir: %d,  buf=", ep_dir);
+        for (int i = 0; i < 16; i++)
+        {
+          printf("%02X ", ep0_buffer[i]);
+        }
+        printf("raw buf data end\n");
+    }*/
+    printf("USB Transfer: dir = %d, ep_num = %d, ep_addr = %02X\n", ep_dir, ep_num, ep_addr);
+    if (ep_num == 0 && ep_dir == TUSB_DIR_OUT) {
+      // Check for SETUP packet
+      bool is_setup = false;
+      //uint16_t rx_len = usb_get_rx_length(); // Get received length
+      uint16_t rx_len = USBHS_RX_LEN(ep_num);
+
+      // Primary check: Use RB_UEP_R_SETUP_IS bit
+      if (R8_U2EP0_RX_CTRL &  USBHS_UEP_R_SETUP_IS) {
+        is_setup = true;
+        
+      }
+
+      if (is_setup) {
+        printf("SETUP packet arrived\n");
+        // Handle SETUP packet
+        ep0_in_toggle = 0; // Reset IN toggle to DATA0
+        ep0_out_toggle = 0; // Reset OUT toggle to DATA0
+        ep_set_response_and_toggle(0, TUSB_DIR_IN, EP_RESPONSE_NAK);
+        ep_set_response_and_toggle(0, TUSB_DIR_OUT, EP_RESPONSE_NAK);
+        dcd_event_setup_received(rhport, ep0_buffer, true);
+
+        // Clear RX done flag
+        R8_U2EP0_RX_CTRL &= ~USBHS_UEP_R_DONE;
+      } else {
+        printf("Normal OUT packet arrived\n");
+        // Handle OUT transfer (non-SETUP)
+        memcpy(&xfer->buffer[xfer->queued_len], ep0_buffer, rx_len);
+        xfer->queued_len += rx_len;
+
+        // Check if this is the last packet
+        if (rx_len < xfer->max_size || xfer->queued_len == xfer->total_len) {
+          xfer->is_last_packet = true;
+        }
+
+        if (xfer->is_last_packet) {
+          ep_set_response_and_toggle(ep_num, ep_dir, EP_RESPONSE_NAK);
+          dcd_event_xfer_complete(rhport, ep_addr, xfer->queued_len, XFER_RESULT_SUCCESS, true);
+        } else {
+          xfer_data_packet(ep_num, ep_dir, xfer);
+        }
+
+        // Clear RX done flag
+        R8_U2EP0_RX_CTRL &= ~USBHS_UEP_R_DONE;
+      }
+    } 
+    else if (ep_dir == TUSB_DIR_IN && ep_num == 0) 
+    {
+      printf("Normal IN packet arrived on ep0\n");
+      // IN transfer on EP0
+      if (xfer->is_last_packet) {
+        ep_set_response_and_toggle(ep_num, ep_dir, EP_RESPONSE_NAK);
+        dcd_event_xfer_complete(rhport, ep_addr, xfer->queued_len, XFER_RESULT_SUCCESS, true);
+      } else {
+        xfer_data_packet(ep_num, ep_dir, xfer);
+      }
+
+      // Clear TX done flag (assume R8_U2EP0_TX_CTRL has RB_UEP_T_DONE at bit 7)
+      R8_U2EP0_TX_CTRL &= ~(1 << 7);
+    }
+    if(ep_num != 0) // endpoints other than 0
+    {
+      printf("Non-0 endpoint interrupt\n");
+      // Non-EP0 endpoint handling
+      if (xfer->buffer == NULL) 
+      {
+        // Endpoint not configured, set NAK
+        printf("Unexpected non-EP0 interrupt: ep_num=%d, dir=%d\n", ep_num, ep_dir);
+        if (ep_dir == TUSB_DIR_OUT) 
+        {
+          ep_set_out_response(ep_num, EP_RESPONSE_NAK);
+          R8_U2EPn_RX_CTRL(ep_num) &= ~USBHS_UEP_R_DONE;
+        } else 
+        {
+          ep_set_response_and_toggle(ep_num, ep_dir, EP_RESPONSE_NAK);
+          R8_U2EPn_TX_CTRL(ep_num) &= ~USBHS_UEP_R_DONE;
+        }
+      } else if (ep_dir == TUSB_DIR_OUT) 
+      {
+        // Non-EP0 OUT transfer
+        uint16_t rx_len = USBHS_RX_LEN(ep_num);
+        printf("Non-EP0 OUT: ep_num=%d, rx_len=%u\n", ep_num, rx_len);
+        if (rx_len > 0 && xfer->queued_len + rx_len <= xfer->total_len) 
+        {
+          // Copy data from RX buffer to xfer buffer
+          memcpy(&xfer->buffer[xfer->queued_len], (void*)R32_U2EPn_RX_DMA(ep_num), rx_len);
+          xfer->queued_len += rx_len;
+          // Check if transfer is complete (short packet or full buffer)
+          if (rx_len < xfer->max_size || xfer->queued_len == xfer->total_len) 
+          {
+            xfer->is_last_packet = true;
+            ep_set_out_response(ep_num, EP_RESPONSE_NAK);
+            dcd_event_xfer_complete(rhport, ep_addr, xfer->queued_len, XFER_RESULT_SUCCESS, true);
+          } else 
+          {
+            ep_set_out_response(ep_num, EP_RESPONSE_ACK);
+          }
+        } else {
+          // Invalid length or buffer overflow, stall
+          ep_set_out_response(ep_num, EP_RESPONSE_STALL);
+        }
+        R8_U2EPn_RX_CTRL(ep_num) &= ~USBHS_UEP_R_DONE;
+      } 
+      else 
+      {
+        // Non-EP0 IN transfer
+        printf("Non-EP0 IN: ep_num=%d, queued_len=%u\n", ep_num, xfer->queued_len);
+        if (xfer->is_last_packet) 
+        {
+          ep_set_response_and_toggle(ep_num, ep_dir, EP_RESPONSE_NAK);
+          dcd_event_xfer_complete(rhport, ep_addr, xfer->queued_len, XFER_RESULT_SUCCESS, true);
+        } 
+        else 
+        {
+          // Prepare next packet
+          uint16_t len = tu_min16(xfer->total_len - xfer->queued_len, xfer->max_size);
+          memcpy((void*)R32_U2EPn_TX_DMA(ep_num), &xfer->buffer[xfer->queued_len], len);
+          USBHS_TX_LEN(ep_num) = len;
+          xfer->queued_len += len;
+          ep_set_response_and_toggle(ep_num, ep_dir, EP_RESPONSE_ACK);
+          if (xfer->queued_len == xfer->total_len) 
+          {
+            xfer->is_last_packet = true;
+          }
+        }
+        R8_U2EPn_TX_CTRL(ep_num) &= ~USBHS_UEP_T_DONE;
+      }
+    }
+    // Clear transfer interrupt flag
+    R8_USB2_INT_FG |= USBHS_UDIE_TRANSFER; // Write 1 to clear
+  }  
+    if (int_flag & USBHS_UDIF_RX_SOF) {
+    printf("SOF\n");
+    // Start of Frame received
+    uint32_t frame_count = (uint32_t)(R16_USB2_FRAME_NO & USBHS_UD_FRAME_NO);// Assume chip provides frame number
+    dcd_event_sof(rhport, frame_count, true);
+
+    // Clear SOF interrupt flag
+    R8_USB2_INT_FG |= USBHS_UDIF_RX_SOF; // Write 1 to clear
+  } else if (int_flag & USBHS_UDIF_SUSPEND) {
+    printf("SUSPEND\n");
+    // Suspend detected
+    dcd_event_t event = {.rhport = rhport, .event_id = DCD_EVENT_SUSPEND};
+    dcd_event_handler(&event, true);
+
+    // Clear SUSPEND interrupt flag
+    R8_USB2_INT_FG |= USBHS_UDIF_SUSPEND; // Write 1 to clear
+  } else if (int_flag & USBHS_UDIF_BUS_RST) {
+    printf("RST\n");
+    // Bus reset detected
+    dcd_event_bus_reset(rhport, TUSB_SPEED_HIGH, true);
+
+    // Reset device address
+    //usb_set_device_address(0);
+    R8_USB2_DEV_AD = 0;
+
+    // Reset EP0 toggles
+    ep0_in_toggle = 0;
+    ep0_out_toggle = 0;
+
+    // Set EP0 to ACK for OUT, NAK for IN
+    ep_set_out_response( 0, EP_RESPONSE_ACK);
+    ep_set_in_response( 0, EP_RESPONSE_NAK);
+
+    // Clear BUS_RESET interrupt flag
+    R8_USB2_INT_FG |= USBHS_UDIF_BUS_RST; // Write 1 to clear
+  }
+}

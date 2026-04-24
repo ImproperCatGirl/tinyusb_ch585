@@ -36,7 +36,7 @@ CFLAGS += \
 #  -Wconversion
 
 # Size Optimization as default
-CFLAGS_OPTIMIZED ?= -Os
+CFLAGS_OPTIMIZED ?= -O0
 
 # Debugging/Optimization
 ifeq ($(DEBUG), 1)

@@ -1,12 +1,18 @@
+//#define CFG_TUSB_DEBUG 3
+//#define CFG_TUD_LOG_LEVEL 3
+
 #include "device/dcd.h"
 #include <stdint.h>
 #define INT_SOFT 1
+
 #include <stdio.h>
 
-#define DEBUG Debug_UART0
+//#define DEBUG Debug_UART0
 #include "CH58x_common.h"
 #include "core_riscv.h"
 #include <stdbool.h>
+#include "tusb.h"
+#include "tusb_config.h"
 
 void DebugInit(void)
  {
@@ -21,7 +27,7 @@ void DebugInit(void)
  __HIGH_CODE
  void USB_IRQHandler(void)
  {
-     dcd_int_handler(0);
+    dcd_int_handler(0);
  }
 
 // Function to disable or mitigate the IWDG
@@ -71,13 +77,16 @@ void IWDG_Disable(void) {
 
 void board_init(void)
 {
-    HSECFG_Capacitance(HSECap_18p);
+    
+    HSECFG_Capacitance(HSECap_12p);
     SetSysClock(CLK_SOURCE_HSE_PLL_62_4MHz);
     IWDG_Disable();
 
     DebugInit();        //配置串口1用来prinft来debug
-    R16_PIN_CONFIG |= RB_PIN_USB_EN | RB_UDP_PU_EN; // enable usb pins
-    printf("start\n");
+    //R16_PIN_CONFIG |= RB_PIN_USB_EN | RB_UDP_PU_EN; // enable usb pins
+    UART0_BaudRateCfg(460800);
+    printf("start\n\n\n");
+    DelayMs(100);
     
 }
 

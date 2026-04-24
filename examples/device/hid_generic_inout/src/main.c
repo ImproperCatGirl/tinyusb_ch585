@@ -22,12 +22,13 @@
  * THE SOFTWARE.
  *
  */
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
+
 #include "bsp/board_api.h"
+#include "class/hid/hid_device.h"
 #include "tusb.h"
 
 /* This example demonstrate HID Generic raw Input & Output.
@@ -95,6 +96,10 @@ int main(void)
   {
     tud_task(); // tinyusb device task
     led_blinking_task();
+    /*if(tud_hid_ready())
+    {
+      //tud_hid_report(0, "dummy", 5);
+    }*/
   }
 }
 

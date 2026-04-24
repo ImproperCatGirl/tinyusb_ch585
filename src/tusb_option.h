@@ -190,6 +190,7 @@
 #define OPT_MCU_CH32V20X         2220 ///< WCH CH32V20X
 #define OPT_MCU_CH32V103         2230 ///< WCH CH32V103
 #define OPT_MCU_CH585            2240
+#define OPT_MCU_CH585_            2250
 
 // NXP LPC MCX
 #define OPT_MCU_MCXN9            2300  ///< NXP MCX N9 Series

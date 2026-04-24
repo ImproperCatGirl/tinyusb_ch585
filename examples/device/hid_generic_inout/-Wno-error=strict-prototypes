@@ -1,0 +1,36 @@
+_build/ch585_evt/obj//home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/CH58x_spi1.o: \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/CH58x_spi1.c \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_common.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH585SFR.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/RVMSIS/core_riscv.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_clk.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_uart.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_gpio.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_i2c.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_flash.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_pwr.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_pwm.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_adc.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_sys.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_timer.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_spi.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_usbdev.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_usbhost.h \
+ /home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/ISP585.h
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_common.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH585SFR.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/RVMSIS/core_riscv.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_clk.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_uart.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_gpio.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_i2c.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_flash.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_pwr.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_pwm.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_adc.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_sys.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_timer.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_spi.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_usbdev.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/CH58x_usbhost.h:
+/home/meow/Projects/experiments/WCH/ch5xx_tinyusb/vendor/tinyusb/hw/mcu/wch/CH585/EVT/EXAM/SRC/StdPeriphDriver/inc/ISP585.h:

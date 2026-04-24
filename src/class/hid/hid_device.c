@@ -221,13 +221,15 @@ void hidd_reset(uint8_t rhport) {
 }
 
 uint16_t hidd_open(uint8_t rhport, tusb_desc_interface_t const *desc_itf, uint16_t max_len) {
+  printf("hidd_open: rhport=%d, itf_num=%d, bNumEndpoints=%d, max_len=%u\n", 
+    rhport, desc_itf->bInterfaceNumber, desc_itf->bNumEndpoints, max_len);
   TU_VERIFY(TUSB_CLASS_HID == desc_itf->bInterfaceClass, 0);
 
   // len = interface + hid + n*endpoints
   uint16_t const drv_len = (uint16_t) (sizeof(tusb_desc_interface_t) + sizeof(tusb_hid_descriptor_hid_t) +
                                        desc_itf->bNumEndpoints * sizeof(tusb_desc_endpoint_t));
   TU_ASSERT(max_len >= drv_len, 0);
-
+  printf("hidd_open: calculated drv_len=%u\n", drv_len);
   // Find available interface
   hidd_interface_t *p_hid;
   uint8_t hid_id;
@@ -265,7 +267,7 @@ uint16_t hidd_open(uint8_t rhport, tusb_desc_interface_t const *desc_itf, uint16
   if (p_hid->ep_out) {
     TU_ASSERT(usbd_edpt_xfer(rhport, p_hid->ep_out, p_epbuf->epout, CFG_TUD_HID_EP_BUFSIZE), drv_len);
   }
-
+  printf("hidd_open: returning drv_len=%u\n", drv_len);
   return drv_len;
 }
 

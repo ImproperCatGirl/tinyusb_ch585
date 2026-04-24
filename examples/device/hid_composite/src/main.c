@@ -22,7 +22,7 @@
  * THE SOFTWARE.
  *
  */
-
+ #define CFG_TUSB_DEBUG 3
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
