@@ -267,7 +267,7 @@ void dcd_int_handler(uint8_t rhport) {
 
   if(mis_busy != fg_busy)
   {
-    printf("Again, WCH contradicts itself\n");
+    PRINT_("Registers do not agree on if the packet token is SETUP\n");
     //while(1);
     //return;
   }
@@ -291,7 +291,7 @@ void dcd_int_handler(uint8_t rhport) {
 
     bool setup2 = (token == UIS_TOKEN_SETUP);
 
-    if(setup != setup2) printf("FUCK\n");
+    if(setup != setup2) PRINT_("Registers do not agree on if the packet token is SETUP\n");
     PRINT_("Transfer: ep=%d, token=0x%02x, setup_act=%d, tog_ok=%d\n", ep, token, setup, tog_ok);
     if(ep == 0)
     {
@@ -317,7 +317,7 @@ void dcd_int_handler(uint8_t rhport) {
         update_in(rhport, ep, false);
         break;
       case UIS_TOKEN_SETUP:
-        printf("Missed a SETUP packet!\n");
+        PRINT_("Missed a SETUP packet!\n");
         data.ep0_tog_in = 1;
         data.ep0_tog_out = 1;
         R8_UEP0_CTRL = RB_UEP_R_TOG | RB_UEP_T_TOG | UEP_R_RES_ACK | UEP_T_RES_NAK;
