@@ -34,7 +34,7 @@
 //all bit values have detailed comment in this header too.
 #include "CH58x_common.h"
 
-#if 1
+#if 0
 
 #include "device/dcd.h"
 
