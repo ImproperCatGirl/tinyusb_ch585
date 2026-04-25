@@ -286,7 +286,7 @@ void dcd_int_handler(uint8_t rhport) {
     uint8_t token = int_st & MASK_UIS_TOKEN;
     //PRINT_("ep = %d, token = %02X\n", ep, token);
     bool tog_ok = int_st & RB_UIS_TOG_OK;
-    bool setup = int_st & RB_UIS_SETUP_ACT; // fuck wch
+    bool setup = int_st & RB_UIS_SETUP_ACT; 
 
     bool setup2 = (token == UIS_TOKEN_SETUP);
 
